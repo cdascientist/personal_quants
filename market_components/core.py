@@ -124,6 +124,313 @@ _FIBO: List[float] = [
 _ML_BLEND: float = 0.40
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# SECTION 0.6 — ALERT CONSIDERATION ENGINE
+#
+# Determines whether a price movement is RELATIVELY CONSIDERABLE — i.e.
+# whether the signal-to-noise ratio and quant confluence warrant alerting C.
+#
+# WIRING INSTRUCTIONS (how to use this in production):
+#
+#   Step 1 — Run VMQ+ snapshot (market_tracker.py or core.py functions):
+#       >>> from market_components.core import momentum_from_prices, trend_from_candles,
+#       ...     volatility_state, exhaustion_zscore, upss_generate, gbm_multi_horizon
+#       >>> vmq_momentum = momentum_from_prices(closes)
+#       >>> trend = trend_from_candles(candles)
+#       >>> vol = volatility_state(closes)
+#       >>> exh = exhaustion_zscore(closes)
+#       >>> upss = upss_generate(vmq_momentum, trend["bias"], vol["state"], ...)
+#       >>> confluence = _harmonic_confluence(upss)
+#       >>> gbms = gbm_multi_horizon(current_price, vmq_momentum)
+#
+#   Step 2 — Call alert_consideration_score() with ALL the VMQ+ outputs:
+#       >>> from market_components.core import alert_consideration_score
+#       >>> result = alert_consideration_score(
+#       ...     momentum=vmq_momentum,
+#       ...     trend_bias=trend["bias"],
+#       ...     trend_strength=trend.get("strength", 0),
+#       ...     trend_clarity=trend.get("clarity", 0),
+#       ...     vol_state=vol["state"],
+#       ...     vol_cv=vol["cv"],
+#       ...     exhaustion_exhausted=exh["exhausted"],
+#       ...     exhaustion_z=exh["z_score"],
+#       ...     confluence=confluence,
+#       ...     gbm_list=gbms,
+#       ...     change_pct=((current_price / prev_close) - 1) * 100,
+#       ... )
+#       >>> result
+#       {'score': 0.72, 'action': 'alert', 'reasons': [...], 'breakdown': {...}}
+#
+#   Step 3 — Use should_suppress_alert() as the final gate:
+#       >>> from market_components.core import should_suppress_alert
+#       >>> if should_suppress_alert(result, volume_spike=False):
+#       ...     print("SUPPRESS — movement is noise, skip alert")
+#       ... else:
+#       ...     print("ALERT — movement is relatively considerable")
+#
+#   Step 4 — (Optional) Feed back result.action for logging:
+#       >>> result["action"]  # "alert" | "borderline" | "suppress"
+#
+# DESIGN RATIONALE:
+#   - 7 weighted factors prevent any single metric from dominating.
+#   - "volume" is excluded from the score and handled externally via
+#     should_suppress_alert()'s volume_spike param — volume confirms
+#     price action but shouldn't dilute quant signals.
+#   - Thresholds are tunable via _CONSIDER_* constants below.
+#   - score() returns reasons[] for transparent debugging — ideal for
+#     alert logs and the "why?" field in iMessage alerts.
+#
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Tunable weights — how much each factor contributes to the final score
+# Sum of all weights (excluding volume) = 1.00 (100%)
+_CONSIDER_MOMENTUM_WEIGHT: float = 0.20       # 20% — absolute momentum strength
+_CONSIDER_TREND_WEIGHT: float = 0.15           # 15% — trend alignment & clarity
+_CONSIDER_VOLATILITY_WEIGHT: float = 0.12      # 12% — vol regime (expanding=more sig)
+_CONSIDER_EXHAUSTION_WEIGHT: float = 0.10      # 10% — exhaustion proximity
+_CONSIDER_CONFLUENCE_WEIGHT: float = 0.18       # 18% — UPSS confluence score
+_CONSIDER_GBM_WEIGHT: float = 0.15              # 15% — GBM confidence (range tightness)
+_CONSIDER_INTRADAY_SPREAD_WEIGHT: float = 0.10  # 10% — intraday range % vs typical
+
+# Consideration thresholds
+_CONSIDER_MIN_THRESHOLD: float = 0.30       # below this = suppress
+_CONSIDER_BORDERLINE_LOW: float = 0.30      # borderline lower bound
+_CONSIDER_BORDERLINE_HIGH: float = 0.60     # borderline upper bound
+_CONSIDER_VOLUME_BOOST: float = 0.40        # see should_suppress_alert()
+
+
+def alert_consideration_score(
+    momentum: float = 0.0,
+    trend_bias: str = "neutral",
+    trend_strength: float = 0.0,
+    trend_clarity: float = 0.0,
+    vol_state: str = "normal",
+    vol_cv: float = 0.0,
+    exhaustion_exhausted: bool = False,
+    exhaustion_z: float = 0.0,
+    confluence: float = 0.0,
+    gbm_list: Optional[list] = None,
+    change_pct: float = 0.0,
+    **kwargs
+) -> dict:
+    """
+    [0.6.1] COMPUTE ALERT CONSIDERATION SCORE.
+
+    Combines 7 quant factors into a single [0.0, 1.0] score that measures
+    whether a price movement is RELATIVELY CONSIDERABLE vs normal daily noise.
+
+    PASS IN: every VMQ+ module output that snapshot produces.
+    GET BACK: score + action + reasons + breakdown.
+
+    SCORING:
+      0.00–0.30 = SUPPRESS  — noise, skip entirely
+      0.30–0.60 = BORDERLINE — alert only if volume confirms (spike)
+      0.60–1.00 = ALERT     — actionable movement, always show
+
+    FACTOR BREAKDOWN (how each metric maps to [0,1]):
+
+      momentum (abs):
+        > MOM_HIGH (0.03) → scale to 1.0  — strong directional move
+        > MOM_MED  (0.01) → linear 0.15-0.60 — moderate
+        < MOM_MED  (0.01) → 0.0-0.15  — noise-level
+
+      trend:
+        bullish/bearish + aligned with momentum → 0.40–1.00
+        bullish/bearish + counter-trend          → 0.20–0.70
+        neutral                                   → 0.05
+
+      volatility:
+        expanding  → 0.50–1.00 (high vol = regime change possible)
+        compressing → 0.05–0.30 (low vol = no urgency)
+        normal     → 0.30
+
+      exhaustion:
+        exhausted  → 0.50–1.00 (potential reversal — noteworthy)
+        not exhausted but |z|>1.0 → 0.20–0.40
+        otherwise   → 0.00–0.20
+
+      confluence (UPSS harmonic alignment):
+        > 0.50 → strong agreement across signal types
+        > 0.20 → some alignment
+        < 0.20 → weak, likely noise
+
+      GBM:
+        tighter spread = higher confidence in direction
+        1.0 - (spread_ratio * 2), clamped [0.10, 1.0]
+
+      intraday spread (change_pct):
+        > 3.0%  → large, scale to 1.0
+        1.5–3.0% → moderate
+        < 1.5%  → small
+
+    Returns dict:
+      score:      float [0.0, 1.0]
+      action:     "alert" | "borderline" | "suppress"
+      reasons:    [str, ...] — human-readable rationale per factor
+      breakdown:  {factor_name: score_component} — raw sub-scores
+    """
+    reasons: List[str] = []
+    breakdown: Dict[str, float] = {}
+
+    # ── 1. Momentum component (abs, scaled to [0,1]) ──
+    abs_mom = abs(momentum)
+    if abs_mom > MOM_HIGH:
+        mom_score = min(1.0, abs_mom / (MOM_HIGH * 3))
+        reasons.append(f"momentum={momentum:+.4f} (strong)")
+    elif abs_mom > MOM_MED:
+        mom_score = 0.15 + (abs_mom - MOM_MED) / (MOM_HIGH - MOM_MED) * 0.45
+        reasons.append(f"momentum={momentum:+.4f} (moderate)")
+    else:
+        mom_score = abs_mom / MOM_MED * 0.15
+        if abs_mom > 0.001:
+            reasons.append(f"momentum={momentum:+.4f} (weak)")
+        else:
+            reasons.append(f"momentum={momentum:+.4f} (noise)")
+    breakdown["momentum"] = round(mom_score, 4)
+
+    # ── 2. Trend component — aligned momentum = more significant ──
+    if trend_bias in ("bullish", "bearish"):
+        aligned = (momentum > 0 and trend_bias == "bullish") or \
+                  (momentum < 0 and trend_bias == "bearish")
+        base = 0.40 if aligned else 0.20
+        clarity_bonus = min(0.30, trend_clarity * 2)
+        strength_bonus = min(0.30, trend_strength * 3)
+        trend_score = min(1.0, base + clarity_bonus + strength_bonus)
+        if aligned:
+            reasons.append(f"trend={trend_bias} (aligned, clarity={trend_clarity:.2f})")
+        else:
+            reasons.append(f"trend={trend_bias} (counter-trend, clarity={trend_clarity:.2f})")
+    else:
+        trend_score = 0.05
+        reasons.append("trend=neutral")
+    breakdown["trend"] = round(trend_score, 4)
+
+    # ── 3. Volatility component — expanding=more meaningful ──
+    if vol_state == "expanding":
+        vol_score = min(1.0, 0.50 + vol_cv * 10)
+        reasons.append(f"vol=expanding (cv={vol_cv:.4f})")
+    elif vol_state == "compressing":
+        vol_score = max(0.05, 0.30 - vol_cv * 10)
+        reasons.append(f"vol=compressing (cv={vol_cv:.4f})")
+    else:
+        vol_score = 0.30
+        reasons.append(f"vol=normal")
+    breakdown["volatility"] = round(vol_score, 4)
+
+    # ── 4. Exhaustion component — exhausted moves are noteworthy ──
+    abs_z = abs(exhaustion_z)
+    if exhaustion_exhausted:
+        exh_score = min(1.0, 0.50 + abs_z / 10)
+        reasons.append(f"exhausted (z={exhaustion_z:+.2f})")
+    else:
+        exh_score = min(0.40, abs_z / 5)
+        if abs_z > 1.0:
+            reasons.append(f"z-score elevated ({exhaustion_z:+.2f})")
+    breakdown["exhaustion"] = round(exh_score, 4)
+
+    # ── 5. UPSS Confluence — signal agreement ──
+    conf_score = min(1.0, confluence)
+    if conf_score > 0.50:
+        reasons.append(f"confluence={conf_score:.2f} (strong)")
+    elif conf_score > 0.20:
+        reasons.append(f"confluence={conf_score:.2f}")
+    else:
+        reasons.append(f"confluence={conf_score:.2f} (weak)")
+    breakdown["confluence"] = round(conf_score, 4)
+
+    # ── 6. GBM confidence — tight spread = high confidence ──
+    gbm_score = 0.10  # default: low confidence
+    if gbm_list and isinstance(gbm_list, list):
+        for g in gbm_list[:1]:  # shortest horizon (most relevant)
+            expected = g.get("expected", 0) or 0.01
+            p5 = g.get("p5", 0) or 0
+            p95 = g.get("p95", 0) or 0
+            if expected > 0 and (p95 - p5) > 0:
+                spread_ratio = (p95 - p5) / expected
+                gbm_score = max(0.10, 1.0 - spread_ratio * 2)
+                gbm_score = min(1.0, gbm_score)
+                reasons.append(f"GBM spread={spread_ratio:.2%}")
+    breakdown["gbm"] = round(gbm_score, 4)
+
+    # ── 7. Intraday spread — larger % moves = more significant ──
+    abs_change = abs(change_pct)
+    if abs_change > 3.0:
+        spread_score = min(1.0, abs_change / 10)
+        reasons.append(f"move={abs_change:.1f}% (large)")
+    elif abs_change > 1.5:
+        spread_score = 0.30 + (abs_change - 1.5) / 1.5 * 0.40
+        reasons.append(f"move={abs_change:.1f}% (moderate)")
+    else:
+        spread_score = abs_change / 1.5 * 0.30
+        reasons.append(f"move={abs_change:.1f}% (small)")
+    breakdown["intraday_spread"] = round(spread_score, 4)
+
+    # ── Weighted final score ──
+    total_weight = (
+        _CONSIDER_MOMENTUM_WEIGHT + _CONSIDER_TREND_WEIGHT +
+        _CONSIDER_VOLATILITY_WEIGHT + _CONSIDER_EXHAUSTION_WEIGHT +
+        _CONSIDER_CONFLUENCE_WEIGHT + _CONSIDER_GBM_WEIGHT +
+        _CONSIDER_INTRADAY_SPREAD_WEIGHT
+    )
+    weighted = (
+        mom_score * _CONSIDER_MOMENTUM_WEIGHT +
+        trend_score * _CONSIDER_TREND_WEIGHT +
+        vol_score * _CONSIDER_VOLATILITY_WEIGHT +
+        exh_score * _CONSIDER_EXHAUSTION_WEIGHT +
+        conf_score * _CONSIDER_CONFLUENCE_WEIGHT +
+        gbm_score * _CONSIDER_GBM_WEIGHT +
+        spread_score * _CONSIDER_INTRADAY_SPREAD_WEIGHT
+    )
+    score = round(weighted / total_weight, 4) if total_weight > 0 else 0.0
+
+    # ── Classify ──
+    if score >= _CONSIDER_BORDERLINE_HIGH:
+        action = "alert"
+    elif score >= _CONSIDER_BORDERLINE_LOW:
+        action = "borderline"
+    else:
+        action = "suppress"
+
+    return {
+        "score": score,
+        "action": action,
+        "reasons": reasons,
+        "breakdown": breakdown,
+    }
+
+
+def should_suppress_alert(consideration: dict, volume_spike: bool = False) -> bool:
+    """
+    [0.6.2] FINAL GATE: should this alert be suppressed?
+
+    INPUT: consideration dict from alert_consideration_score()
+           volume_spike = True if volume ratio > 1.8x (from scs_alert.py)
+
+    BEHAVIOR:
+      action="alert"      → NEVER suppress (score >= 0.60)
+      action="borderline" → suppress UNLESS volume spike confirms
+      action="suppress"   → ALWAYS suppress (score < 0.30, pure noise)
+
+    WHY VOLUME IS HERE NOT IN THE SCORE:
+      Volume is a CONFIRMATION signal, not a quality signal.
+      A high-volume move with weak quants = noise that got attention.
+      A low-volume move with strong quants = quiet accumulation/distribution.
+      So volume overrides borderline scores but doesn't dilute quant scores.
+
+    Returns: True = suppress the alert, False = proceed with alert
+    """
+    action = consideration.get("action", "suppress")
+
+    if action == "alert":
+        return False                           # Definitely alert
+    elif action == "borderline":
+        return not volume_spike                # Alert only if volume confirms
+    else:
+        return True                            # Suppress noise
+
+
+
+
 def _ewma(values: List[float], alpha: float = 0.3) -> float:
     """
     [0.5.2] Exponentially Weighted Moving Average — scalar result.
