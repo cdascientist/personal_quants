@@ -496,7 +496,7 @@ _JS_TEMPLATE = r"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body style="margin:0;padding:0;background:#06080f;overflow:hidden;">
 <canvas id="c"></canvas>
-<script>
+<script>(function(){
 const CFG=__CONFIG__;
 const CW=1400,CH=800,HDR=48,LEG=240;
 const AY=0.38,AX=0.19,FOV=980,ZM=2.257,SCX=470,SCY=540;
@@ -945,7 +945,7 @@ ctx.fillStyle='rgba(255,255,255,0.65)';ctx.font='bold 9px monospace';ctx.textAli
 ctx.fillText(CFG.badge,CW-63,25);
 
 window.__chartReady=true;
-</script></body></html>"""
+})();</script></body></html>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 10 — PUPPETEER RENDERER
@@ -985,7 +985,7 @@ async def _render_one(config: Dict) -> bytes:
         "height":            CANVAS_H,
         "deviceScaleFactor": DEVICE_SCALE,
     })
-    await page.setContent(html, {"waitUntil": "networkidle0"})
+    await page.setContent(html)
     await page.waitForFunction("window.__chartReady === true", {"timeout": 15000})
     png_bytes = await page.screenshot({"type": "png", "omitBackground": False})
     await page.close()
