@@ -58,7 +58,7 @@ import statistics
 import math
 import sys
 import os
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 
 
 # [0.0] Add parent dir to sys.path so both direct-run and import-run work
@@ -209,10 +209,10 @@ def alert_consideration_score(
     exhaustion_exhausted: bool = False,
     exhaustion_z: float = 0.0,
     confluence: float = 0.0,
-    gbm_list: Optional[list] = None,
+    gbm_list: Optional[List[Dict]] = None,
     change_pct: float = 0.0,
-    **kwargs
-) -> dict:
+    **kwargs: float
+) -> Dict:
     """
     [0.6.1] COMPUTE ALERT CONSIDERATION SCORE.
 
@@ -340,7 +340,7 @@ def alert_consideration_score(
 
     # ── 6. GBM confidence — tight spread = high confidence ──
     gbm_score = 0.10  # default: low confidence
-    if gbm_list and isinstance(gbm_list, list):
+    if gbm_list:
         for g in gbm_list[:1]:  # shortest horizon (most relevant)
             expected = g.get("expected", 0) or 0.01
             p5 = g.get("p5", 0) or 0
@@ -1710,9 +1710,9 @@ def run_simulation(name: str, data: dict) -> List[str]:
     cp      = data["current_price"]
     op      = data["open_price"]
     avg_vol = data.get("avg_volume", 50000)
-    strike  = data.get("strike", 0)
-    cost    = data.get("cost_basis", 0)
-    clt     = data.get("clt_price", 0)
+    _strike = data.get("strike", 0)
+    _cost   = data.get("cost_basis", 0)
+    _clt    = data.get("clt_price", 0)
     desc    = data.get("desc", "")
 
     lines.append("")
