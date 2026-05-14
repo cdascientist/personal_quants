@@ -1,3 +1,4 @@
+# Last modified: 2026-05-14 01:35 MST
 """
 core — Pure Algorithmic Market Quants  [ML/Harmonic Enhanced v3.0]
 ===================================================================
