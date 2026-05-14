@@ -1,6 +1,7 @@
-# Last modified: 2026-05-14 01:35 MST
+# Last modified: 2026-05-13 19:16 MST
+# Tachikoma modification � 2026-05-13 19:16 MST
 """
-core — Pure Algorithmic Market Quants  [ML/Harmonic Enhanced v3.0]
+core — Algorithmic Market Quants  [ML/Harmonic Enhanced v3.0]
 ===================================================================
 
 Sandboxed calculation engine for VMQ+ market analysis.
