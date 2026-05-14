@@ -1692,6 +1692,24 @@ TEST_DATA = {
         "cost_basis": 100.0, "clt_price": 95.0,
         "desc": "Sharp spike then pullback -- expect exhaustion, expanding vol",
     },
+
+    # [S9.1.5] SES live market -- bearish penny stock, normal vol, high volume (snapshot #324)
+    "SES_LIVE": {
+        "prices": [1.08, 1.07, 1.06, 1.06, 1.05],
+        "candles": [
+            {"high": 1.09, "low": 1.07, "close": 1.08, "volume": 120000},
+            {"high": 1.08, "low": 1.06, "close": 1.07, "volume": 135000},
+            {"high": 1.07, "low": 1.05, "close": 1.06, "volume": 145000},
+            {"high": 1.07, "low": 1.05, "close": 1.06, "volume": 155000},
+            {"high": 1.06, "low": 1.04, "close": 1.05, "volume": 160000},
+            {"high": 1.06, "low": 1.04, "close": 1.05, "volume": 150000},
+            {"high": 1.06, "low": 1.04, "close": 1.055, "volume": 148000},
+        ],
+        "current_price": 1.055, "open_price": 1.08,
+        "avg_volume": 80000, "strike": 1.00,
+        "cost_basis": 1.05, "clt_price": 1.12,
+        "desc": "SES live snapshot #324 -- bearish momentum, normal vol, high volume, alpha bear",
+    },
 }
 
 
@@ -1983,24 +2001,6 @@ if __name__ == "__main__":
         print("  python core.py              Run all test scenarios")
         print("  python core.py --quick      Quick smoke test (BULL_RUN + BEAR_SLIDE)")
         print("  python core.py BULL_RUN     Run a specific scenario")
-        print(f"  Available: {', '.join(TEST_DATA.keys())
-    # [S9.1.5] SES live market -- bearish penny stock, normal vol, high volume (snapshot #324)
-    "SES_LIVE": {
-        "prices": [1.08, 1.07, 1.06, 1.06, 1.05],
-        "candles": [
-            {"high": 1.09, "low": 1.07, "close": 1.08, "volume": 120000},
-            {"high": 1.08, "low": 1.06, "close": 1.07, "volume": 135000},
-            {"high": 1.07, "low": 1.05, "close": 1.06, "volume": 145000},
-            {"high": 1.07, "low": 1.05, "close": 1.06, "volume": 155000},
-            {"high": 1.06, "low": 1.04, "close": 1.05, "volume": 160000},
-            {"high": 1.06, "low": 1.04, "close": 1.05, "volume": 150000},
-            {"high": 1.06, "low": 1.04, "close": 1.055, "volume": 148000},
-        ],
-        "current_price": 1.055, "open_price": 1.08,
-        "avg_volume": 80000, "strike": 1.00,
-        "cost_basis": 1.05, "clt_price": 1.12,
-        "desc": "SES live snapshot #324 -- bearish momentum, normal vol, high volume, alpha bear",
-    },
-}")
+        print(f"  Available: {', '.join(TEST_DATA.keys())}")
     else:
         run_tests()
