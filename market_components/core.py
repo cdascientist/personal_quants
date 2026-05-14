@@ -1,59 +1,44 @@
-# Last modified: 2026-05-13 08:44 PM MDT
-# Tachikoma modification -- 2026-05-13 08:44 PM MDT
+# Last modified: 2026-05-13 08:54 PM MDT
+# Tachikoma modification -- 2026-05-13 08:54 PM MDT
 """
-core — Algorithmic Market Quants  [ML/Harmonic Enhanced v3.0]
+core -- Algorithmic Market Quants  [ML/Harmonic Enhanced v3.0]
 ===================================================================
 
 Sandboxed calculation engine for VMQ+ market analysis.
-No I/O, no network — just math. Fully self-contained: import functions
+No I/O, no network -- just math. Fully self-contained: import functions
 for production alerts, or run directly for sandboxed simulation.
 
-Modules consolidated into this file:
-  1  momentum    — rate-of-change momentum (historical + intraday)
-  2  trend       — higher-highs / lower-lows bias detection
-  3  volatility  — CV-based regime classification + ATR
-  4  exhaustion  — z-score exhaustion detection
-  5  volume_sig  — volume impulse ratio
-  6  upss        — Greek-letter signal taxonomy (alpha beta gamma delta omega H)
-  7  gbm         — Geometric Brownian Motion price projections
-  8  chains      — active trade chain detection (PREMIUM_STACK, CLT, etc.)
+===================================================================
+TABLE OF CONTENTS
+===================================================================
+  IMPORTS       — Constants, utils, path setup
+  ML ENGINE     — Adaptive primitives (EWMA, Kalman, GARCH, Fractal, etc.)
+  ALERT ENGINE  — Consideration scoring + suppression gate
 
-ML/Harmonic Engine (SECTION 0.5) — pure-Python adaptive primitives:
-  _ewma / _ewma_series         — exponentially weighted moving average
-  _kalman_smooth               — 1-D scalar Kalman filter (noise reduction)
-  _dominant_harmonic           — DFT-based dominant cycle detector
-  _garch11_variance            — GARCH(1,1)-lite variance forecast
-  _fractal_dimension           — FRAMA-style fractal dimension (trend quality)
-  _fibonacci_proximity         — Fibonacci retracement / extension proximity
-  _shannon_entropy             — distributional randomness measure
-  _adaptive_zscore             — EWMA-based adaptive z-score
-  _harmonic_confluence         — signal alignment & weighted confluence
-  _bayesian_confidence_update  — Bayesian posterior confidence blend
-  _jump_intensity              — Merton jump-diffusion parameter estimation
+  1. MOMENTUM   — Rate-of-change scoring (historical + intraday)
+  2. TREND      — Higher-high / lower-low bias detection
+  3. VOLATILITY — CV-based regime classification + ATR
+  4. EXHAUSTION — Z-score exhaustion detection
+  5. VOLUME     — Volume impulse ratio vs baseline
+  6. UPSS       — Greek-letter signal taxonomy
+  7. GBM        — Geometric Brownian Motion price projections
+  8. CHAINS     — Active trade chain detection
 
-Enhancement design principles:
-  • Every original calculation is preserved verbatim.
-  • ML/harmonic results are computed in parallel and blended (60/40 default).
-  • Return types and function signatures are unchanged.
-  • All enhancements are pure Python — no numpy, scipy, or external deps.
+  SANDBOX       — Static test data + simulation runner + CLI
+===================================================================
 
-Sandbox (SECTION 9) provides static test data and runnable simulations
-that mirror the alert output format.
-
----
 Usage:
-    # As a module — production alerts import functions:
+    # As a module -- production alerts import functions:
     from market_components.core import momentum_from_prices, upss_generate
 
-    # As a sandbox — run directly to see simulated alerts:
+    # As a sandbox -- run directly to see simulated alerts:
     python3 market_components/core.py          # Run ALL tests
     python3 market_components/core.py --quick   # Quick smoke test
     python3 market_components/core.py --symbol BULL_RUN  # Run specific test
 
 ---
-The VMQ+ Reference — for portable market calculations.
-in utils.py  <-- data fetching, constants, signal classification
-in core.py   <-- you are here (pure algorithmic quants + sandbox)
+The VMQ+ Reference -- for portable market calculations.
+in core.py   <-- you are here (algorithmic quants + sandbox)
 """
 
 import statistics
@@ -70,7 +55,7 @@ if _PARENT_DIR not in sys.path:
     sys.path.insert(0, _PARENT_DIR)
 
 
-# -- 0. IMPORTS --------------------------------------------------------------
+# -- IMPORTS ------------------------------------------------------------------
 # Constants from utils: tunables that drive threshold checks below.
 from market_components.utils import (
     MINUTES_PER_YEAR,
@@ -94,26 +79,23 @@ from market_components.utils import (
     LONG_TERM_DAYS,
 )
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ML / HARMONIC ENGINE  —  Adaptive Calculation Primitives
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#   Pure-Python primitives used internally by all 8 quantitative modules.
+#   No external dependencies -- all math is hand-rolled.
+#
+#   FILTERS:      _ewma, _ewma_series, _kalman_smooth
+#   STATISTICS:   _garch11_variance, _shannon_entropy, _adaptive_zscore
+#   DETECTION:    _dominant_harmonic, _fractal_dimension, _fibonacci_proximity
+#   COMBINATION:  _harmonic_confluence, _bayesian_confidence_update, _jump_intensity
+#
+#   Research basis:
+#     Kalman (1960), Mandelbrot (1983), Bollerslev (1986),
+#     Merton (1976), Shannon (1948), Pesavento (1997)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# ═════════════════════════════════════════════════════════════════════════════
-# SECTION 0.5 — ML / HARMONIC ENGINE
-#
-# Pure-Python adaptive calculation primitives used internally by all 8
-# quantitative modules.  No external dependencies — all math is hand-rolled.
-#
-# Design notes:
-#   • Functions prefixed with underscore (_) are private to this module.
-#   • Each primitive is self-contained with explicit edge-case handling.
-#   • All numeric outputs are floats; no numpy arrays are used.
-#
-# Research basis:
-#   Kalman (1960)    — optimal state estimation under Gaussian noise
-#   Mandelbrot(1983) — fractal dimension for market regime classification
-#   Bollerslev(1986) — GARCH(1,1) conditional variance estimation
-#   Merton (1976)    — jump-diffusion extension of Black-Scholes
-#   Shannon (1948)   — entropy as a measure of distributional randomness
-#   Pesavento (1997) — Fibonacci harmonic pattern ratios
-# ═════════════════════════════════════════════════════════════════════════════
 
 # [0.5.0] Fibonacci ratios for harmonic level and pattern detection
 _FIBO: List[float] = [
@@ -126,8 +108,9 @@ _FIBO: List[float] = [
 _ML_BLEND: float = 0.40
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# SECTION 0.6 — ALERT CONSIDERATION ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
+# ALERT CONSIDERATION ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
 #
 # Determines whether a price movement is RELATIVELY CONSIDERABLE — i.e.
 # whether the signal-to-noise ratio and quant confluence warrant alerting C.
@@ -432,6 +415,7 @@ def should_suppress_alert(consideration: dict, volume_spike: bool = False) -> bo
 
 
 
+# -- FILTERS -------------------------------------------------------------------
 
 def _ewma(values: List[float], alpha: float = 0.3) -> float:
     """
@@ -490,6 +474,9 @@ def _kalman_smooth(
     return out
 
 
+
+# -- DETECTION -----------------------------------------------------------------
+
 def _dominant_harmonic(values: List[float]) -> Dict:
     """
     [0.5.5] DFT-based dominant cycle detector.
@@ -523,6 +510,9 @@ def _dominant_harmonic(values: List[float]) -> Dict:
     period = max(1, n // best_k)
     return {"period": period, "amplitude": best_amp, "phase": best_phase}
 
+
+
+# -- STATISTICS ----------------------------------------------------------------
 
 def _garch11_variance(
     deltas: List[float],
@@ -684,6 +674,9 @@ def _adaptive_zscore(values: List[float], window: int = 20) -> float:
     return (values[-1] - mu) / std
 
 
+
+# -- COMBINATION ---------------------------------------------------------------
+
 def _harmonic_confluence(signals: List[Dict]) -> float:
     """
     [0.5.11] Harmonic confluence score across a list of UPSS-style signals.
@@ -764,7 +757,6 @@ def _jump_intensity(
         mj, jv = 0.0, 0.0
 
     return {"lambda": lam, "mean_jump": mj, "jump_vol": jv}
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1. MOMENTUM — rate-of-change scoring
@@ -887,7 +879,6 @@ def momentum_intraday(current: float, open_: float) -> float:
     _result = (1.0 - _ML_BLEND) * _orig + _ML_BLEND * _ml_mom
     return max(-1.0, min(1.0, round(_result, 4)))
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # 2. TREND BIAS — higher-high vs lower-low counting
 #
@@ -987,7 +978,6 @@ def trend_from_candles(candles: List[Dict]) -> dict:
         "reversal_pressure": _reversal_pressure,  # Fibonacci reversal hint [0,0.5]
         "adaptive_window": _adaptive_win,       # actual window used
     }
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 3. VOLATILITY — regime classification + ATR
@@ -1093,7 +1083,6 @@ def atr_from_candles(candles: List[Dict]) -> float:
     _result = (1.0 - _ML_BLEND) * _orig_atr + _ML_BLEND * _ema_atr
     return round(_result, 6)
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # 4. EXHAUSTION — z-score detection
 #
@@ -1176,7 +1165,6 @@ def exhaustion_zscore(prices: List[float]) -> dict:
         "exhaustion_confidence": round(_bayes_conf, 4),
     }
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # 5. VOLUME SIGNAL — recent vs baseline comparison
 #
@@ -1236,7 +1224,6 @@ def volume_compare(candles: List[Dict], avg_volume: float = 0) -> str:
             return "elevated"
 
     return "normal"
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 6. UPSS SIGNAL TAXONOMY — Greek-letter market state classification
@@ -1343,7 +1330,6 @@ def upss_generate(
                 sig["conf"] = round(min(1.0, sig["conf"] * 1.10), 4)   # +10% bonus
 
     return signals
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. GBM PRICE PROJECTIONS — Geometric Brownian Motion
@@ -1487,7 +1473,6 @@ def gbm_multi_horizon(
         for h in horizons
     ]
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # 8. CHAIN DETECTION — active trade chain classification
 #
@@ -1609,9 +1594,9 @@ def chains_detect(
     chains.sort(key=lambda c: c["confidence"], reverse=True)
     return chains
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# SECTION 9 -- SANDBOX: Static test data + simulation runner
+# ═══════════════════════════════════════════════════════════════════════════════
+# SANDBOX  —  Static Test Data + Simulation Runner + CLI
+# ═══════════════════════════════════════════════════════════════════════════════ Static test data + simulation runner
 #
 # This section is ONLY executed when core.py is run directly (not imported).
 # It provides:
