@@ -1,5 +1,5 @@
-# Last modified: 2026-05-13 19:16 MST
-# Tachikoma modification -- 2026-05-13 19:16 MST
+# Last modified: 2026-05-13 19:33 MST
+# Tachikoma modification -- 2026-05-13 19:33 MST
 """
 core — Algorithmic Market Quants  [ML/Harmonic Enhanced v3.0]
 ===================================================================
@@ -1691,6 +1691,24 @@ TEST_DATA = {
         "avg_volume": 40000, "strike": 100.0,
         "cost_basis": 100.0, "clt_price": 95.0,
         "desc": "Sharp spike then pullback -- expect exhaustion, expanding vol",
+    },
+
+    # [S9.1.5] SES live market -- bearish penny stock, normal vol, high volume (snapshot #324)
+    "SES_LIVE": {
+        "prices": [1.08, 1.07, 1.06, 1.06, 1.05],
+        "candles": [
+            {"high": 1.09, "low": 1.07, "close": 1.08, "volume": 120000},
+            {"high": 1.08, "low": 1.06, "close": 1.07, "volume": 135000},
+            {"high": 1.07, "low": 1.05, "close": 1.06, "volume": 145000},
+            {"high": 1.07, "low": 1.05, "close": 1.06, "volume": 155000},
+            {"high": 1.06, "low": 1.04, "close": 1.05, "volume": 160000},
+            {"high": 1.06, "low": 1.04, "close": 1.05, "volume": 150000},
+            {"high": 1.06, "low": 1.04, "close": 1.055, "volume": 148000},
+        ],
+        "current_price": 1.055, "open_price": 1.08,
+        "avg_volume": 80000, "strike": 1.00,
+        "cost_basis": 1.05, "clt_price": 1.12,
+        "desc": "SES live snapshot #324 -- bearish momentum, normal vol, high volume, alpha bear",
     },
 }
 
